@@ -73,6 +73,7 @@ resource managedEnvironment 'Microsoft.App/managedEnvironments@2025-02-02-previe
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
         customerId: workspace.properties.customerId
+        sharedKey: workspace.listKeys().primarySharedKey
         dynamicJsonColumns: false
       }
     }
