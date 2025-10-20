@@ -14,10 +14,6 @@ param location string = resourceGroup().location
 @description('Log retention period in days')
 param logRetentionInDays int = 30
 
-@description('N8N encryption key (must be set)')
-@secure()
-param n8nEncryptionKey string
-
 @description('Timezone for the n8n container')
 param timezone string = 'UTC'
 
@@ -32,6 +28,19 @@ param cpuCores string = '1'
 
 @description('Memory allocation for the container')
 param memorySize string = '2Gi'
+
+@description('Name for the Key Vault')
+param keyVaultName string = 'kv-${uniqueString(resourceGroup().id)}'
+
+@description('SKU for the Key Vault')
+param keyVaultSku string = 'standard'
+
+@description('Tenant ID for the Key Vault access policies')
+param tenantId string = tenant().tenantId
+
+@description('Secure random value for generating the n8n encryption key')
+@secure()
+param encryptionKeySeed string = newGuid()
 
 // Log Analytics Workspace
 resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
@@ -92,13 +101,58 @@ resource managedEnvironment 'Microsoft.App/managedEnvironments@2025-02-02-previe
   }
 }
 
+// Key Vault
+resource keyVault 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
+  name: keyVaultName
+  location: location
+  properties: {
+    enabledForDeployment: false
+    enabledForDiskEncryption: false
+    enabledForTemplateDeployment: false
+    tenantId: tenantId
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 90
+    enablePurgeProtection: true
+    enableRbacAuthorization: true
+    sku: {
+      name: keyVaultSku
+      family: 'A'
+    }
+    publicNetworkAccess: 'Enabled'
+    networkAcls: {
+      defaultAction: 'Allow'
+      bypass: 'AzureServices'
+    }
+  }
+}
+
+// Role assignment for Container App to access Key Vault secrets
+resource keyVaultSecretsUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(containerApp.id, keyVault.id, '4633458b-17de-408a-b874-0445c86b69e6')
+  scope: keyVault
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+    principalId: containerApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// n8n encryption key secret in Key Vault
+resource n8nEncryptionKeySecret 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = {
+  parent: keyVault
+  name: 'n8n-encryption-key'
+  properties: {
+    value: base64ToString(base64(uniqueString(keyVault.id, encryptionKeySeed, resourceGroup().id)))
+  }
+}
+
 // n8n Container App
 resource containerApp 'Microsoft.App/containerapps@2025-02-02-preview' = {
   name: containerAppName
   location: location
   kind: 'containerapps'
   identity: {
-    type: 'None'
+    type: 'SystemAssigned'
   }
   properties: {
     managedEnvironmentId: managedEnvironment.id
@@ -123,6 +177,13 @@ resource containerApp 'Microsoft.App/containerapps@2025-02-02-preview' = {
         }
       }
       identitySettings: []
+      secrets: [
+        {
+          name: 'n8n-encryption-key'
+          keyVaultUrl: n8nEncryptionKeySecret.properties.secretUri
+          identity: 'system'
+        }
+      ]
     }
     template: {
       containers: [
@@ -133,7 +194,7 @@ resource containerApp 'Microsoft.App/containerapps@2025-02-02-preview' = {
           env: [
             {
               name: 'N8N_ENCRYPTION_KEY'
-              value: n8nEncryptionKey
+              secretRef: 'n8n-encryption-key'
             }
             {
               name: 'GENERIC_TIMEZONE'
@@ -178,3 +239,6 @@ output workspaceName string = workspace.name
 output managedEnvironmentId string = managedEnvironment.id
 output managedEnvironmentName string = managedEnvironment.name
 output managedEnvironmentDefaultDomain string = managedEnvironment.properties.defaultDomain
+output keyVaultName string = keyVault.name
+output keyVaultId string = keyVault.id
+output keyVaultUri string = keyVault.properties.vaultUri
