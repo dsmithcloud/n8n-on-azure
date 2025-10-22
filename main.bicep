@@ -1,15 +1,43 @@
 // Parameters
-@description('Name for the n8n container app')
-param containerAppName string = 'n8n'
-
-@description('Name for the Log Analytics workspace')
-param workspaceName string = 'workspace-${uniqueString(resourceGroup().id)}'
-
-@description('Name for the Container Apps managed environment')
-param managedEnvironmentName string = 'managedEnvironment-${uniqueString(resourceGroup().id)}'
-
 @description('Azure region where resources will be deployed')
 param location string = resourceGroup().location
+
+@description('Application name for resource naming')
+param applicationName string = 'n8n'
+
+@description('Environment name (dev, test, prod)')
+param environment string = 'prod'
+
+@description('Project or workload identifier')
+param workloadName string = 'workflow'
+
+@description('Optional instance identifier for multiple deployments')
+param instance string = '001'
+
+@description('Common tags to be applied to all resources')
+param tags object = {
+  Environment: environment
+  Application: applicationName
+  Workload: workloadName
+  CostCenter: 'USEC COGS CSU-FSI-1010'
+  Owner: 'smithdavid'
+  CreatedBy: 'Bicep'
+  DeploymentDate: utcNow('yyyy-MM-dd')
+}
+
+// CAF Naming Variables
+var resourceSuffix = '${workloadName}-${environment}-${location}-${instance}'
+var containerAppName = 'ca-${applicationName}-${resourceSuffix}'
+var workspaceName = 'log-${applicationName}-${resourceSuffix}'
+var managedEnvironmentName = 'cae-${applicationName}-${resourceSuffix}'
+var keyVaultName = 'kv-${applicationName}-${take(uniqueString(resourceGroup().id), 8)}'
+var vnetName = 'vnet-${applicationName}-${resourceSuffix}'
+var containerAppsSubnetName = 'snet-ca-${applicationName}-${resourceSuffix}'
+var appGatewaySubnetName = 'snet-agw-${applicationName}-${resourceSuffix}'
+var appGatewayName = 'agw-${applicationName}-${resourceSuffix}'
+var frontDoorProfileName = 'afd-${applicationName}-${resourceSuffix}'
+var frontDoorEndpointName = '${applicationName}-ep-${environment}'
+var publicIpName = 'pip-agw-${applicationName}-${resourceSuffix}'
 
 @description('Log retention period in days')
 param logRetentionInDays int = 30
@@ -29,9 +57,6 @@ param cpuCores string = '1'
 @description('Memory allocation for the container')
 param memorySize string = '2Gi'
 
-@description('Name for the Key Vault')
-param keyVaultName string = 'kv-${uniqueString(resourceGroup().id)}'
-
 @description('SKU for the Key Vault')
 param keyVaultSku string = 'standard'
 
@@ -48,34 +73,20 @@ param enableVNetIntegration bool = false
 @description('Enable external access via Application Gateway and Front Door')
 param enableExternalAccess bool = true
 
-@description('Virtual Network name (required if enableVNetIntegration is true)')
-param vnetName string = 'vnet-${uniqueString(resourceGroup().id)}'
-
 @description('Virtual Network address prefix')
 param vnetAddressPrefix string = '10.0.0.0/16'
-
-@description('Container Apps subnet name')
-param containerAppsSubnetName string = 'snet-containerapps'
 
 @description('Container Apps subnet address prefix')
 param containerAppsSubnetPrefix string = '10.0.0.0/23'
 
-@description('Application Gateway subnet name')
-param appGatewaySubnetName string = 'snet-appgateway'
-
 @description('Application Gateway subnet address prefix')  
 param appGatewaySubnetPrefix string = '10.0.2.0/24'
-
-@description('Application Gateway name')
-param appGatewayName string = 'agw-${uniqueString(resourceGroup().id)}'
-
-@description('Azure Front Door profile name')
-param frontDoorProfileName string = 'afd-${uniqueString(resourceGroup().id)}'
 
 // Virtual Network (conditional)
 resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = if (enableVNetIntegration) {
   name: vnetName
   location: location
+  tags: tags
   properties: {
     addressSpace: {
       addressPrefixes: [
@@ -111,6 +122,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = if (enableVNetInt
 resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
   name: workspaceName
   location: location
+  tags: tags
   properties: {
     sku: {
       name: 'PerGB2018'
@@ -133,6 +145,7 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
 resource managedEnvironment 'Microsoft.App/managedEnvironments@2025-02-02-preview' = {
   name: managedEnvironmentName
   location: location
+  tags: tags
   properties: {
     appLogsConfiguration: {
       destination: 'log-analytics'
@@ -175,6 +188,7 @@ resource managedEnvironment 'Microsoft.App/managedEnvironments@2025-02-02-previe
 resource keyVault 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
   name: keyVaultName
   location: location
+  tags: tags
   properties: {
     enabledForDeployment: false
     enabledForDiskEncryption: false
@@ -220,6 +234,7 @@ resource n8nEncryptionKeySecret 'Microsoft.KeyVault/vaults/secrets@2024-04-01-pr
 resource containerApp 'Microsoft.App/containerapps@2025-02-02-preview' = {
   name: containerAppName
   location: location
+  tags: tags
   kind: 'containerapps'
   identity: {
     type: 'SystemAssigned'
@@ -305,8 +320,9 @@ resource containerApp 'Microsoft.App/containerapps@2025-02-02-preview' = {
 
 // Public IP for Application Gateway
 resource appGatewayPublicIP 'Microsoft.Network/publicIPAddresses@2023-11-01' = if (enableVNetIntegration && enableExternalAccess) {
-  name: '${appGatewayName}-pip'
+  name: publicIpName
   location: location
+  tags: tags
   sku: {
     name: 'Standard'
     tier: 'Regional'
@@ -314,7 +330,7 @@ resource appGatewayPublicIP 'Microsoft.Network/publicIPAddresses@2023-11-01' = i
   properties: {
     publicIPAllocationMethod: 'Static'
     dnsSettings: {
-      domainNameLabel: '${appGatewayName}-${uniqueString(resourceGroup().id)}'
+      domainNameLabel: 'agw-${applicationName}-${take(uniqueString(resourceGroup().id), 8)}'
     }
   }
 }
@@ -323,11 +339,22 @@ resource appGatewayPublicIP 'Microsoft.Network/publicIPAddresses@2023-11-01' = i
 resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = if (enableVNetIntegration && enableExternalAccess) {
   name: appGatewayName
   location: location
+  tags: tags
   properties: {
     sku: {
-      name: 'Standard_v2'
-      tier: 'Standard_v2'
+      name: 'WAF_v2'
+      tier: 'WAF_v2'
       capacity: 1
+    }
+    webApplicationFirewallConfiguration: {
+      enabled: true
+      firewallMode: 'Prevention'
+      ruleSetType: 'OWASP'
+      ruleSetVersion: '3.2'
+      disabledRuleGroups: []
+      requestBodyCheck: true
+      maxRequestBodySizeInKb: 128
+      fileUploadLimitInMb: 100
     }
     gatewayIPConfigurations: [
       {
@@ -426,15 +453,16 @@ resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = if (ena
 resource frontDoorProfile 'Microsoft.Cdn/profiles@2023-05-01' = if (enableVNetIntegration && enableExternalAccess) {
   name: frontDoorProfileName
   location: 'Global'
+  tags: tags
   sku: {
-    name: 'Standard_AzureFrontDoor'
+    name: 'Premium_AzureFrontDoor'
   }
   properties: {}
 }
 
 // Front Door Endpoint
 resource frontDoorEndpoint 'Microsoft.Cdn/profiles/afdEndpoints@2023-05-01' = if (enableVNetIntegration && enableExternalAccess) {
-  name: 'n8n-endpoint'
+  name: frontDoorEndpointName
   parent: frontDoorProfile
   location: 'Global'
   properties: {
@@ -465,11 +493,15 @@ resource frontDoorOriginGroup 'Microsoft.Cdn/profiles/originGroups@2023-05-01' =
 resource frontDoorOrigin 'Microsoft.Cdn/profiles/originGroups/origins@2023-05-01' = if (enableVNetIntegration && enableExternalAccess) {
   name: 'n8n-origin'
   parent: frontDoorOriginGroup
+  dependsOn: [
+    appGateway
+    appGatewayPublicIP
+  ]
   properties: {
-    hostName: '${appGatewayName}-${uniqueString(resourceGroup().id)}.${location}.cloudapp.azure.com'
+    hostName: 'agw-${applicationName}-${take(uniqueString(resourceGroup().id), 8)}.${location}.cloudapp.azure.com'
     httpPort: 80
     httpsPort: 443
-    originHostHeader: '${appGatewayName}-${uniqueString(resourceGroup().id)}.${location}.cloudapp.azure.com'
+    originHostHeader: 'agw-${applicationName}-${take(uniqueString(resourceGroup().id), 8)}.${location}.cloudapp.azure.com'
     priority: 1
     weight: 1000
     enabledState: 'Enabled'
@@ -480,6 +512,9 @@ resource frontDoorOrigin 'Microsoft.Cdn/profiles/originGroups/origins@2023-05-01
 resource frontDoorRoute 'Microsoft.Cdn/profiles/afdEndpoints/routes@2023-05-01' = if (enableVNetIntegration && enableExternalAccess) {
   name: 'n8n-route'
   parent: frontDoorEndpoint
+  dependsOn: [
+    frontDoorOrigin
+  ]
   properties: {
     originGroup: {
       id: frontDoorOriginGroup.id
@@ -510,7 +545,7 @@ output keyVaultId string = keyVault.id
 output keyVaultUri string = keyVault.properties.vaultUri
 output vnetId string = enableVNetIntegration ? vnet.id : ''
 output vnetName string = enableVNetIntegration ? vnet.name : ''
-output appGatewayFQDN string = (enableVNetIntegration && enableExternalAccess) ? '${appGatewayName}-${uniqueString(resourceGroup().id)}.${location}.cloudapp.azure.com' : ''
-output frontDoorEndpointHostName string = (enableVNetIntegration && enableExternalAccess) ? 'n8n-endpoint-${uniqueString(resourceGroup().id)}.z01.azurefd.net' : ''
+output appGatewayFQDN string = (enableVNetIntegration && enableExternalAccess) ? 'agw-${applicationName}-${take(uniqueString(resourceGroup().id), 8)}.${location}.cloudapp.azure.com' : ''
+output frontDoorEndpointHostName string = (enableVNetIntegration && enableExternalAccess) ? '${frontDoorEndpointName}-${take(uniqueString(resourceGroup().id), 8)}.azurefd.net' : ''
 output isVNetIntegrated bool = enableVNetIntegration
 output hasExternalAccess bool = enableExternalAccess

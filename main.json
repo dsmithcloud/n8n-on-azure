@@ -1,0 +1,720 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.38.5.1644",
+      "templateHash": "17076691122945153073"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region where resources will be deployed"
+      }
+    },
+    "applicationName": {
+      "type": "string",
+      "defaultValue": "n8n",
+      "metadata": {
+        "description": "Application name for resource naming"
+      }
+    },
+    "environment": {
+      "type": "string",
+      "defaultValue": "prod",
+      "metadata": {
+        "description": "Environment name (dev, test, prod)"
+      }
+    },
+    "workloadName": {
+      "type": "string",
+      "defaultValue": "workflow",
+      "metadata": {
+        "description": "Project or workload identifier"
+      }
+    },
+    "instance": {
+      "type": "string",
+      "defaultValue": "001",
+      "metadata": {
+        "description": "Optional instance identifier for multiple deployments"
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {
+        "Environment": "[parameters('environment')]",
+        "Application": "[parameters('applicationName')]",
+        "Workload": "[parameters('workloadName')]",
+        "CostCenter": "USEC COGS CSU-FSI-1010",
+        "Owner": "smithdavid",
+        "CreatedBy": "Bicep",
+        "DeploymentDate": "[utcNow('yyyy-MM-dd')]"
+      },
+      "metadata": {
+        "description": "Common tags to be applied to all resources"
+      }
+    },
+    "logRetentionInDays": {
+      "type": "int",
+      "defaultValue": 30,
+      "metadata": {
+        "description": "Log retention period in days"
+      }
+    },
+    "timezone": {
+      "type": "string",
+      "defaultValue": "UTC",
+      "metadata": {
+        "description": "Timezone for the n8n container"
+      }
+    },
+    "minReplicas": {
+      "type": "int",
+      "defaultValue": 0,
+      "metadata": {
+        "description": "Minimum number of container replicas"
+      }
+    },
+    "maxReplicas": {
+      "type": "int",
+      "defaultValue": 10,
+      "metadata": {
+        "description": "Maximum number of container replicas"
+      }
+    },
+    "cpuCores": {
+      "type": "string",
+      "defaultValue": "1",
+      "metadata": {
+        "description": "CPU allocation for the container"
+      }
+    },
+    "memorySize": {
+      "type": "string",
+      "defaultValue": "2Gi",
+      "metadata": {
+        "description": "Memory allocation for the container"
+      }
+    },
+    "keyVaultSku": {
+      "type": "string",
+      "defaultValue": "standard",
+      "metadata": {
+        "description": "SKU for the Key Vault"
+      }
+    },
+    "tenantId": {
+      "type": "string",
+      "defaultValue": "[tenant().tenantId]",
+      "metadata": {
+        "description": "Tenant ID for the Key Vault access policies"
+      }
+    },
+    "encryptionKeySeed": {
+      "type": "securestring",
+      "defaultValue": "[newGuid()]",
+      "metadata": {
+        "description": "Secure random value for generating the n8n encryption key"
+      }
+    },
+    "enableVNetIntegration": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable VNet integration for Container Apps environment"
+      }
+    },
+    "enableExternalAccess": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable external access via Application Gateway and Front Door"
+      }
+    },
+    "vnetAddressPrefix": {
+      "type": "string",
+      "defaultValue": "10.0.0.0/16",
+      "metadata": {
+        "description": "Virtual Network address prefix"
+      }
+    },
+    "containerAppsSubnetPrefix": {
+      "type": "string",
+      "defaultValue": "10.0.0.0/23",
+      "metadata": {
+        "description": "Container Apps subnet address prefix"
+      }
+    },
+    "appGatewaySubnetPrefix": {
+      "type": "string",
+      "defaultValue": "10.0.2.0/24",
+      "metadata": {
+        "description": "Application Gateway subnet address prefix"
+      }
+    }
+  },
+  "variables": {
+    "resourceSuffix": "[format('{0}-{1}-{2}-{3}', parameters('workloadName'), parameters('environment'), parameters('location'), parameters('instance'))]",
+    "containerAppName": "[format('ca-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
+    "workspaceName": "[format('log-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
+    "managedEnvironmentName": "[format('cae-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
+    "keyVaultName": "[format('kv-{0}-{1}', parameters('applicationName'), take(uniqueString(resourceGroup().id), 8))]",
+    "vnetName": "[format('vnet-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
+    "containerAppsSubnetName": "[format('snet-ca-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
+    "appGatewaySubnetName": "[format('snet-agw-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
+    "appGatewayName": "[format('agw-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
+    "frontDoorProfileName": "[format('afd-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
+    "frontDoorEndpointName": "[format('{0}-ep-{1}', parameters('applicationName'), parameters('environment'))]",
+    "publicIpName": "[format('pip-agw-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]"
+  },
+  "resources": [
+    {
+      "condition": "[parameters('enableVNetIntegration')]",
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('vnetName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[parameters('vnetAddressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('containerAppsSubnetName')]",
+            "properties": {
+              "addressPrefix": "[parameters('containerAppsSubnetPrefix')]",
+              "delegations": [
+                {
+                  "name": "Microsoft.App/environments",
+                  "properties": {
+                    "serviceName": "Microsoft.App/environments"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "[variables('appGatewaySubnetName')]",
+            "properties": {
+              "addressPrefix": "[parameters('appGatewaySubnetPrefix')]"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2025-02-01",
+      "name": "[variables('workspaceName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": "[parameters('logRetentionInDays')]",
+        "features": {
+          "legacy": 0,
+          "searchVersion": 1,
+          "enableLogAccessUsingOnlyResourcePermissions": true
+        },
+        "workspaceCapping": {
+          "dailyQuotaGb": "[json('-1')]"
+        },
+        "publicNetworkAccessForIngestion": "Enabled",
+        "publicNetworkAccessForQuery": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2025-02-02-preview",
+      "name": "[variables('managedEnvironmentName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+          "logAnalyticsConfiguration": {
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('workspaceName')), '2025-02-01').customerId]",
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('workspaceName')), '2025-02-01').primarySharedKey]",
+            "dynamicJsonColumns": false
+          }
+        },
+        "zoneRedundant": false,
+        "kedaConfiguration": {},
+        "daprConfiguration": {},
+        "customDomainConfiguration": {},
+        "vnetConfiguration": "[if(parameters('enableVNetIntegration'), createObject('infrastructureSubnetId', format('{0}/subnets/{1}', resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')), variables('containerAppsSubnetName')), 'internal', true()), null())]",
+        "workloadProfiles": [
+          {
+            "workloadProfileType": "Consumption",
+            "name": "Consumption",
+            "enableFips": false
+          }
+        ],
+        "peerAuthentication": {
+          "mtls": {
+            "enabled": false
+          }
+        },
+        "peerTrafficConfiguration": {
+          "encryption": {
+            "enabled": false
+          }
+        },
+        "publicNetworkAccess": "[if(parameters('enableVNetIntegration'), 'Disabled', 'Enabled')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]",
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('workspaceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2024-04-01-preview",
+      "name": "[variables('keyVaultName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "enabledForDeployment": false,
+        "enabledForDiskEncryption": false,
+        "enabledForTemplateDeployment": false,
+        "tenantId": "[parameters('tenantId')]",
+        "enableSoftDelete": true,
+        "softDeleteRetentionInDays": 90,
+        "enablePurgeProtection": true,
+        "enableRbacAuthorization": true,
+        "sku": {
+          "name": "[parameters('keyVaultSku')]",
+          "family": "A"
+        },
+        "publicNetworkAccess": "Enabled",
+        "networkAcls": {
+          "defaultAction": "Allow",
+          "bypass": "AzureServices"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[format('Microsoft.KeyVault/vaults/{0}', variables('keyVaultName'))]",
+      "name": "[guid(resourceId('Microsoft.App/containerApps', variables('containerAppName')), resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), '4633458b-17de-408a-b874-0445c86b69e6')]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]",
+        "principalId": "[reference(resourceId('Microsoft.App/containerApps', variables('containerAppName')), '2025-02-02-preview', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/containerApps', variables('containerAppName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-04-01-preview",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'n8n-encryption-key')]",
+      "properties": {
+        "value": "[base64ToString(base64(uniqueString(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), parameters('encryptionKeySeed'), resourceGroup().id)))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2025-02-02-preview",
+      "name": "[variables('containerAppName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "containerapps",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]",
+        "environmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]",
+        "workloadProfileName": "Consumption",
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "ingress": {
+            "external": "[if(parameters('enableVNetIntegration'), false(), true())]",
+            "targetPort": 5678,
+            "exposedPort": 0,
+            "transport": "Auto",
+            "traffic": [
+              {
+                "weight": 100,
+                "latestRevision": true
+              }
+            ],
+            "allowInsecure": false,
+            "stickySessions": {
+              "affinity": "none"
+            }
+          },
+          "identitySettings": [],
+          "secrets": [
+            {
+              "name": "n8n-encryption-key",
+              "keyVaultUrl": "[reference(resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'n8n-encryption-key'), '2024-04-01-preview').secretUri]",
+              "identity": "system"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "image": "docker.io/n8nio/n8n:latest",
+              "imageType": "ContainerImage",
+              "name": "[variables('containerAppName')]",
+              "env": [
+                {
+                  "name": "N8N_ENCRYPTION_KEY",
+                  "secretRef": "n8n-encryption-key"
+                },
+                {
+                  "name": "GENERIC_TIMEZONE",
+                  "value": "[parameters('timezone')]"
+                },
+                {
+                  "name": "WEBHOOK_URL",
+                  "value": "[if(and(parameters('enableVNetIntegration'), parameters('enableExternalAccess')), format('https://n8n-endpoint-{0}.z01.azurefd.net', uniqueString(resourceGroup().id)), format('https://{0}.{1}', variables('containerAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName')), '2025-02-02-preview').defaultDomain))]"
+                },
+                {
+                  "name": "TRUST_PROXY",
+                  "value": "true"
+                },
+                {
+                  "name": "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS",
+                  "value": "true"
+                }
+              ],
+              "resources": {
+                "cpu": "[json(parameters('cpuCores'))]",
+                "memory": "[parameters('memorySize')]"
+              },
+              "probes": []
+            }
+          ],
+          "scale": {
+            "minReplicas": "[parameters('minReplicas')]",
+            "maxReplicas": "[parameters('maxReplicas')]",
+            "cooldownPeriod": 300,
+            "pollingInterval": 30
+          },
+          "volumes": []
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'n8n-encryption-key')]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableVNetIntegration'), parameters('enableExternalAccess'))]",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('publicIpName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "Standard",
+        "tier": "Regional"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Static",
+        "dnsSettings": {
+          "domainNameLabel": "[format('agw-{0}-{1}', parameters('applicationName'), take(uniqueString(resourceGroup().id), 8))]"
+        }
+      }
+    },
+    {
+      "condition": "[and(parameters('enableVNetIntegration'), parameters('enableExternalAccess'))]",
+      "type": "Microsoft.Network/applicationGateways",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('appGatewayName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "sku": {
+          "name": "WAF_v2",
+          "tier": "WAF_v2",
+          "capacity": 1
+        },
+        "webApplicationFirewallConfiguration": {
+          "enabled": true,
+          "firewallMode": "Prevention",
+          "ruleSetType": "OWASP",
+          "ruleSetVersion": "3.2",
+          "disabledRuleGroups": [],
+          "requestBodyCheck": true,
+          "maxRequestBodySizeInKb": 128,
+          "fileUploadLimitInMb": 100
+        },
+        "gatewayIPConfigurations": [
+          {
+            "name": "appGatewayIpConfig",
+            "properties": {
+              "subnet": {
+                "id": "[format('{0}/subnets/{1}', resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')), variables('appGatewaySubnetName'))]"
+              }
+            }
+          }
+        ],
+        "frontendIPConfigurations": [
+          {
+            "name": "appGatewayFrontendIP",
+            "properties": {
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))]"
+              }
+            }
+          }
+        ],
+        "frontendPorts": [
+          {
+            "name": "port_80",
+            "properties": {
+              "port": 80
+            }
+          },
+          {
+            "name": "port_443",
+            "properties": {
+              "port": 443
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "name": "n8nBackendPool",
+            "properties": {
+              "backendAddresses": [
+                {
+                  "fqdn": "[reference(resourceId('Microsoft.App/containerApps', variables('containerAppName')), '2025-02-02-preview').configuration.ingress.fqdn]"
+                }
+              ]
+            }
+          }
+        ],
+        "backendHttpSettingsCollection": [
+          {
+            "name": "appGatewayBackendHttpSettings",
+            "properties": {
+              "port": 443,
+              "protocol": "Https",
+              "cookieBasedAffinity": "Disabled",
+              "pickHostNameFromBackendAddress": true,
+              "requestTimeout": 20
+            }
+          }
+        ],
+        "httpListeners": [
+          {
+            "name": "appGatewayHttpListener",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/frontendIPConfigurations', variables('appGatewayName'), 'appGatewayFrontendIP')]"
+              },
+              "frontendPort": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/frontendPorts', variables('appGatewayName'), 'port_80')]"
+              },
+              "protocol": "Http"
+            }
+          }
+        ],
+        "requestRoutingRules": [
+          {
+            "name": "n8nRoutingRule",
+            "properties": {
+              "ruleType": "Basic",
+              "priority": 100,
+              "httpListener": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/httpListeners', variables('appGatewayName'), 'appGatewayHttpListener')]"
+              },
+              "backendAddressPool": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/backendAddressPools', variables('appGatewayName'), 'n8nBackendPool')]"
+              },
+              "backendHttpSettings": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/backendHttpSettingsCollection', variables('appGatewayName'), 'appGatewayBackendHttpSettings')]"
+              }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))]",
+        "[resourceId('Microsoft.App/containerApps', variables('containerAppName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableVNetIntegration'), parameters('enableExternalAccess'))]",
+      "type": "Microsoft.Cdn/profiles",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('frontDoorProfileName')]",
+      "location": "Global",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "Premium_AzureFrontDoor"
+      },
+      "properties": {}
+    },
+    {
+      "condition": "[and(parameters('enableVNetIntegration'), parameters('enableExternalAccess'))]",
+      "type": "Microsoft.Cdn/profiles/afdEndpoints",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', variables('frontDoorProfileName'), variables('frontDoorEndpointName'))]",
+      "location": "Global",
+      "properties": {
+        "enabledState": "Enabled"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Cdn/profiles', variables('frontDoorProfileName'))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableVNetIntegration'), parameters('enableExternalAccess'))]",
+      "type": "Microsoft.Cdn/profiles/originGroups",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', variables('frontDoorProfileName'), 'n8n-origin-group')]",
+      "properties": {
+        "loadBalancingSettings": {
+          "sampleSize": 4,
+          "successfulSamplesRequired": 3,
+          "additionalLatencyInMilliseconds": 50
+        },
+        "healthProbeSettings": {
+          "probePath": "/",
+          "probeRequestType": "HEAD",
+          "probeProtocol": "Http",
+          "probeIntervalInSeconds": 100
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Cdn/profiles', variables('frontDoorProfileName'))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableVNetIntegration'), parameters('enableExternalAccess'))]",
+      "type": "Microsoft.Cdn/profiles/originGroups/origins",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', variables('frontDoorProfileName'), 'n8n-origin-group', 'n8n-origin')]",
+      "properties": {
+        "hostName": "[format('agw-{0}-{1}.{2}.cloudapp.azure.com', parameters('applicationName'), take(uniqueString(resourceGroup().id), 8), parameters('location'))]",
+        "httpPort": 80,
+        "httpsPort": 443,
+        "originHostHeader": "[format('agw-{0}-{1}.{2}.cloudapp.azure.com', parameters('applicationName'), take(uniqueString(resourceGroup().id), 8), parameters('location'))]",
+        "priority": 1,
+        "weight": 1000,
+        "enabledState": "Enabled"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/applicationGateways', variables('appGatewayName'))]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))]",
+        "[resourceId('Microsoft.Cdn/profiles/originGroups', variables('frontDoorProfileName'), 'n8n-origin-group')]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableVNetIntegration'), parameters('enableExternalAccess'))]",
+      "type": "Microsoft.Cdn/profiles/afdEndpoints/routes",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', variables('frontDoorProfileName'), variables('frontDoorEndpointName'), 'n8n-route')]",
+      "properties": {
+        "originGroup": {
+          "id": "[resourceId('Microsoft.Cdn/profiles/originGroups', variables('frontDoorProfileName'), 'n8n-origin-group')]"
+        },
+        "supportedProtocols": [
+          "Http",
+          "Https"
+        ],
+        "patternsToMatch": [
+          "/*"
+        ],
+        "forwardingProtocol": "HttpsOnly",
+        "linkToDefaultDomain": "Enabled",
+        "httpsRedirect": "Enabled"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Cdn/profiles/afdEndpoints', variables('frontDoorProfileName'), variables('frontDoorEndpointName'))]",
+        "[resourceId('Microsoft.Cdn/profiles/originGroups/origins', variables('frontDoorProfileName'), 'n8n-origin-group', 'n8n-origin')]",
+        "[resourceId('Microsoft.Cdn/profiles/originGroups', variables('frontDoorProfileName'), 'n8n-origin-group')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "containerAppFQDN": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.App/containerApps', variables('containerAppName')), '2025-02-02-preview').configuration.ingress.fqdn]"
+    },
+    "containerAppName": {
+      "type": "string",
+      "value": "[variables('containerAppName')]"
+    },
+    "workspaceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('workspaceName'))]"
+    },
+    "workspaceName": {
+      "type": "string",
+      "value": "[variables('workspaceName')]"
+    },
+    "managedEnvironmentId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]"
+    },
+    "managedEnvironmentName": {
+      "type": "string",
+      "value": "[variables('managedEnvironmentName')]"
+    },
+    "managedEnvironmentDefaultDomain": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName')), '2025-02-02-preview').defaultDomain]"
+    },
+    "keyVaultName": {
+      "type": "string",
+      "value": "[variables('keyVaultName')]"
+    },
+    "keyVaultId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+    },
+    "keyVaultUri": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), '2024-04-01-preview').vaultUri]"
+    },
+    "vnetId": {
+      "type": "string",
+      "value": "[if(parameters('enableVNetIntegration'), resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')), '')]"
+    },
+    "vnetName": {
+      "type": "string",
+      "value": "[if(parameters('enableVNetIntegration'), variables('vnetName'), '')]"
+    },
+    "appGatewayFQDN": {
+      "type": "string",
+      "value": "[if(and(parameters('enableVNetIntegration'), parameters('enableExternalAccess')), format('agw-{0}-{1}.{2}.cloudapp.azure.com', parameters('applicationName'), take(uniqueString(resourceGroup().id), 8), parameters('location')), '')]"
+    },
+    "frontDoorEndpointHostName": {
+      "type": "string",
+      "value": "[if(and(parameters('enableVNetIntegration'), parameters('enableExternalAccess')), format('{0}-{1}.azurefd.net', variables('frontDoorEndpointName'), take(uniqueString(resourceGroup().id), 8)), '')]"
+    },
+    "isVNetIntegrated": {
+      "type": "bool",
+      "value": "[parameters('enableVNetIntegration')]"
+    },
+    "hasExternalAccess": {
+      "type": "bool",
+      "value": "[parameters('enableExternalAccess')]"
+    }
+  }
+}
