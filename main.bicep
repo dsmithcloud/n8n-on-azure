@@ -34,6 +34,8 @@ var keyVaultName = 'kv-${applicationName}-${take(uniqueString(resourceGroup().id
 var vnetName = 'vnet-${applicationName}-${resourceSuffix}'
 var containerAppsSubnetName = 'snet-ca-${applicationName}-${resourceSuffix}'
 var appGatewaySubnetName = 'snet-agw-${applicationName}-${resourceSuffix}'
+var containerAppsNsgName = 'nsg-ca-${applicationName}-${resourceSuffix}'
+var appGatewayNsgName = 'nsg-agw-${applicationName}-${resourceSuffix}'
 var appGatewayName = 'agw-${applicationName}-${resourceSuffix}'
 var frontDoorProfileName = 'afd-${applicationName}-${resourceSuffix}'
 var frontDoorEndpointName = '${applicationName}-ep-${environment}'
@@ -82,6 +84,196 @@ param containerAppsSubnetPrefix string = '10.0.0.0/23'
 @description('Application Gateway subnet address prefix')  
 param appGatewaySubnetPrefix string = '10.0.2.0/24'
 
+// Network Security Group for Container Apps subnet
+resource containerAppsNsg 'Microsoft.Network/networkSecurityGroups@2023-11-01' = if (enableVNetIntegration) {
+  name: containerAppsNsgName
+  location: location
+  tags: tags
+  properties: {
+    securityRules: [
+      {
+        name: 'AllowContainerAppsInbound'
+        properties: {
+          description: 'Allow Container Apps infrastructure traffic'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: 'VirtualNetwork'
+          destinationAddressPrefix: 'VirtualNetwork'
+          access: 'Allow'
+          priority: 100
+          direction: 'Inbound'
+        }
+      }
+      {
+        name: 'AllowAzureLoadBalancerInbound'
+        properties: {
+          description: 'Allow Azure Load Balancer health probes'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: 'AzureLoadBalancer'
+          destinationAddressPrefix: '*'
+          access: 'Allow'
+          priority: 110
+          direction: 'Inbound'
+        }
+      }
+      {
+        name: 'AllowContainerAppsOutbound'
+        properties: {
+          description: 'Allow Container Apps outbound traffic'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: '*'
+          destinationAddressPrefix: '*'
+          access: 'Allow'
+          priority: 100
+          direction: 'Outbound'
+        }
+      }
+      {
+        name: 'DenyAllInbound'
+        properties: {
+          description: 'Deny all other inbound traffic'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: '*'
+          destinationAddressPrefix: '*'
+          access: 'Deny'
+          priority: 4096
+          direction: 'Inbound'
+        }
+      }
+    ]
+  }
+}
+
+// Network Security Group for Application Gateway subnet
+resource appGatewayNsg 'Microsoft.Network/networkSecurityGroups@2023-11-01' = if (enableVNetIntegration && enableExternalAccess) {
+  name: appGatewayNsgName
+  location: location
+  tags: tags
+  properties: {
+    securityRules: [
+      {
+        name: 'AllowGatewayManagerInbound'
+        properties: {
+          description: 'Allow Gateway Manager traffic for v2 SKU'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '65200-65535'
+          sourceAddressPrefix: 'GatewayManager'
+          destinationAddressPrefix: '*'
+          access: 'Allow'
+          priority: 100
+          direction: 'Inbound'
+        }
+      }
+      {
+        name: 'AllowHttpInbound'
+        properties: {
+          description: 'Allow HTTP traffic'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '80'
+          sourceAddressPrefix: '*'
+          destinationAddressPrefix: '*'
+          access: 'Allow'
+          priority: 110
+          direction: 'Inbound'
+        }
+      }
+      {
+        name: 'AllowHttpsInbound'
+        properties: {
+          description: 'Allow HTTPS traffic'
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '443'
+          sourceAddressPrefix: '*'
+          destinationAddressPrefix: '*'
+          access: 'Allow'
+          priority: 120
+          direction: 'Inbound'
+        }
+      }
+      {
+        name: 'AllowAzureLoadBalancerInbound'
+        properties: {
+          description: 'Allow Azure Load Balancer health probes'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: 'AzureLoadBalancer'
+          destinationAddressPrefix: '*'
+          access: 'Allow'
+          priority: 130
+          direction: 'Inbound'
+        }
+      }
+      {
+        name: 'AllowVnetInbound'
+        properties: {
+          description: 'Allow VNet traffic to backend'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: 'VirtualNetwork'
+          destinationAddressPrefix: 'VirtualNetwork'
+          access: 'Allow'
+          priority: 140
+          direction: 'Inbound'
+        }
+      }
+      {
+        name: 'AllowInternetOutbound'
+        properties: {
+          description: 'Allow outbound internet access'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: '*'
+          destinationAddressPrefix: 'Internet'
+          access: 'Allow'
+          priority: 100
+          direction: 'Outbound'
+        }
+      }
+      {
+        name: 'AllowVnetOutbound'
+        properties: {
+          description: 'Allow VNet outbound traffic'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: '*'
+          destinationAddressPrefix: 'VirtualNetwork'
+          access: 'Allow'
+          priority: 110
+          direction: 'Outbound'
+        }
+      }
+      {
+        name: 'DenyAllInbound'
+        properties: {
+          description: 'Deny all other inbound traffic'
+          protocol: '*'
+          sourcePortRange: '*'
+          destinationPortRange: '*'
+          sourceAddressPrefix: '*'
+          destinationAddressPrefix: '*'
+          access: 'Deny'
+          priority: 4096
+          direction: 'Inbound'
+        }
+      }
+    ]
+  }
+}
+
 // Virtual Network (conditional)
 resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = if (enableVNetIntegration) {
   name: vnetName
@@ -98,6 +290,9 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = if (enableVNetInt
         name: containerAppsSubnetName
         properties: {
           addressPrefix: containerAppsSubnetPrefix
+          networkSecurityGroup: {
+            id: containerAppsNsg.id
+          }
           delegations: [
             {
               name: 'Microsoft.App/environments'
@@ -112,6 +307,9 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = if (enableVNetInt
         name: appGatewaySubnetName
         properties: {
           addressPrefix: appGatewaySubnetPrefix
+          networkSecurityGroup: enableExternalAccess ? {
+            id: appGatewayNsg.id
+          } : null
         }
       }
     ]
@@ -545,6 +743,8 @@ output keyVaultId string = keyVault.id
 output keyVaultUri string = keyVault.properties.vaultUri
 output vnetId string = enableVNetIntegration ? vnet.id : ''
 output vnetName string = enableVNetIntegration ? vnet.name : ''
+output containerAppsNsgId string = enableVNetIntegration ? containerAppsNsg.id : ''
+output appGatewayNsgId string = (enableVNetIntegration && enableExternalAccess) ? appGatewayNsg.id : ''
 output appGatewayFQDN string = (enableVNetIntegration && enableExternalAccess) ? 'agw-${applicationName}-${take(uniqueString(resourceGroup().id), 8)}.${location}.cloudapp.azure.com' : ''
 output frontDoorEndpointHostName string = (enableVNetIntegration && enableExternalAccess) ? '${frontDoorEndpointName}-${take(uniqueString(resourceGroup().id), 8)}.azurefd.net' : ''
 output isVNetIntegrated bool = enableVNetIntegration

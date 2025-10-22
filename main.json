@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.38.5.1644",
-      "templateHash": "17076691122945153073"
+      "templateHash": "18377819010075196831"
     }
   },
   "parameters": {
@@ -167,12 +167,206 @@
     "vnetName": "[format('vnet-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
     "containerAppsSubnetName": "[format('snet-ca-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
     "appGatewaySubnetName": "[format('snet-agw-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
+    "containerAppsNsgName": "[format('nsg-ca-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
+    "appGatewayNsgName": "[format('nsg-agw-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
     "appGatewayName": "[format('agw-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
     "frontDoorProfileName": "[format('afd-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]",
     "frontDoorEndpointName": "[format('{0}-ep-{1}', parameters('applicationName'), parameters('environment'))]",
     "publicIpName": "[format('pip-agw-{0}-{1}', parameters('applicationName'), variables('resourceSuffix'))]"
   },
   "resources": [
+    {
+      "condition": "[parameters('enableVNetIntegration')]",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('containerAppsNsgName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "AllowContainerAppsInbound",
+            "properties": {
+              "description": "Allow Container Apps infrastructure traffic",
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "AllowAzureLoadBalancerInbound",
+            "properties": {
+              "description": "Allow Azure Load Balancer health probes",
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "AzureLoadBalancer",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 110,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "AllowContainerAppsOutbound",
+            "properties": {
+              "description": "Allow Container Apps outbound traffic",
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Outbound"
+            }
+          },
+          {
+            "name": "DenyAllInbound",
+            "properties": {
+              "description": "Deny all other inbound traffic",
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "access": "Deny",
+              "priority": 4096,
+              "direction": "Inbound"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "condition": "[and(parameters('enableVNetIntegration'), parameters('enableExternalAccess'))]",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2023-11-01",
+      "name": "[variables('appGatewayNsgName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "AllowGatewayManagerInbound",
+            "properties": {
+              "description": "Allow Gateway Manager traffic for v2 SKU",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "65200-65535",
+              "sourceAddressPrefix": "GatewayManager",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "AllowHttpInbound",
+            "properties": {
+              "description": "Allow HTTP traffic",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "80",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 110,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "AllowHttpsInbound",
+            "properties": {
+              "description": "Allow HTTPS traffic",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "443",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 120,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "AllowAzureLoadBalancerInbound",
+            "properties": {
+              "description": "Allow Azure Load Balancer health probes",
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "AzureLoadBalancer",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 130,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "AllowVnetInbound",
+            "properties": {
+              "description": "Allow VNet traffic to backend",
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "access": "Allow",
+              "priority": 140,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "AllowInternetOutbound",
+            "properties": {
+              "description": "Allow outbound internet access",
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "Internet",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Outbound"
+            }
+          },
+          {
+            "name": "AllowVnetOutbound",
+            "properties": {
+              "description": "Allow VNet outbound traffic",
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "access": "Allow",
+              "priority": 110,
+              "direction": "Outbound"
+            }
+          },
+          {
+            "name": "DenyAllInbound",
+            "properties": {
+              "description": "Deny all other inbound traffic",
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "access": "Deny",
+              "priority": 4096,
+              "direction": "Inbound"
+            }
+          }
+        ]
+      }
+    },
     {
       "condition": "[parameters('enableVNetIntegration')]",
       "type": "Microsoft.Network/virtualNetworks",
@@ -191,6 +385,9 @@
             "name": "[variables('containerAppsSubnetName')]",
             "properties": {
               "addressPrefix": "[parameters('containerAppsSubnetPrefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('containerAppsNsgName'))]"
+              },
               "delegations": [
                 {
                   "name": "Microsoft.App/environments",
@@ -204,11 +401,16 @@
           {
             "name": "[variables('appGatewaySubnetName')]",
             "properties": {
-              "addressPrefix": "[parameters('appGatewaySubnetPrefix')]"
+              "addressPrefix": "[parameters('appGatewaySubnetPrefix')]",
+              "networkSecurityGroup": "[if(parameters('enableExternalAccess'), createObject('id', resourceId('Microsoft.Network/networkSecurityGroups', variables('appGatewayNsgName'))), null())]"
             }
           }
         ]
-      }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('appGatewayNsgName'))]",
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('containerAppsNsgName'))]"
+      ]
     },
     {
       "type": "Microsoft.OperationalInsights/workspaces",
@@ -699,6 +901,14 @@
     "vnetName": {
       "type": "string",
       "value": "[if(parameters('enableVNetIntegration'), variables('vnetName'), '')]"
+    },
+    "containerAppsNsgId": {
+      "type": "string",
+      "value": "[if(parameters('enableVNetIntegration'), resourceId('Microsoft.Network/networkSecurityGroups', variables('containerAppsNsgName')), '')]"
+    },
+    "appGatewayNsgId": {
+      "type": "string",
+      "value": "[if(and(parameters('enableVNetIntegration'), parameters('enableExternalAccess')), resourceId('Microsoft.Network/networkSecurityGroups', variables('appGatewayNsgName')), '')]"
     },
     "appGatewayFQDN": {
       "type": "string",
