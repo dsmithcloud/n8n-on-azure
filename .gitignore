@@ -63,6 +63,31 @@ obj/
 .env.test.local
 .env.production.local
 
+# Certificate files
+*.cer
+*.crt
+*.der
+*.p7b
+*.p7c
+*.p12
+*.p7s
+*.pem
+*.pfx
+*.key
+*.csr
+*.jks
+*.keystore
+*.truststore
+*.pvk
+*.spc
+
+# SSL/TLS certificates
+ssl/
+certs/
+certificates/
+*.cert
+*.ca-bundle
+
 # Backup files
 *.bak
 *.backup
