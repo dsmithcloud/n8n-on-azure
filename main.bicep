@@ -275,11 +275,57 @@ module privateDnsZone 'br/public:avm/res/network/private-dns-zone:0.5.0' = {
   }
 }
 
-// Note: DNS A records for container apps should be created after deployment
-// using the actual managed environment default domain, for example:
-// az network private-dns record-set a add-record --zone-name "southcentralus.azurecontainerapps.io" 
-//   --resource-group rg-n8n-dev --record-set-name "ca-n8n-dev-scus-g4ezszbqokxhu.calmflower-201c4757" 
-//   --ipv4-address "10.0.0.90"
+// DNS A Record for Container App - using deployment script to create after container app
+resource dnsRecordScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
+  name: 'create-container-app-dns-record'
+  location: location
+  kind: 'AzureCLI'
+  properties: {
+    azCliVersion: '2.50.0'
+    timeout: 'PT10M'
+    retentionInterval: 'PT1H'
+    environmentVariables: [
+      {
+        name: 'RESOURCE_GROUP'
+        value: resourceGroup().name
+      }
+      {
+        name: 'DNS_ZONE_NAME'
+        value: privateDnsZoneNameCAF
+      }
+      {
+        name: 'CONTAINER_APP_NAME'
+        value: containerAppNameCAF
+      }
+      {
+        name: 'MANAGED_ENV_NAME'
+        value: managedEnvironmentNameCAF
+      }
+    ]
+    scriptContent: '''
+      # Get container app FQDN and managed environment static IP
+      FQDN=$(az containerapp show --name $CONTAINER_APP_NAME --resource-group $RESOURCE_GROUP --query "properties.configuration.ingress.fqdn" -o tsv)
+      STATIC_IP=$(az containerapp env show --name $MANAGED_ENV_NAME --resource-group $RESOURCE_GROUP --query "properties.staticIp" -o tsv)
+      
+      # Extract the record name (everything before the DNS zone)
+      RECORD_NAME=${FQDN%.$DNS_ZONE_NAME}
+      
+      echo "Creating DNS A record: $RECORD_NAME -> $STATIC_IP"
+      
+      # Create the A record
+      az network private-dns record-set a add-record \
+        --zone-name $DNS_ZONE_NAME \
+        --resource-group $RESOURCE_GROUP \
+        --record-set-name "$RECORD_NAME" \
+        --ipv4-address $STATIC_IP \
+        --ttl 300
+    '''
+  }
+  dependsOn: [
+    privateDnsZone
+    containerApp
+  ]
+}
 
 // Public IP for Application Gateway
 module publicIP 'br/public:avm/res/network/public-ip-address:0.6.0' = {
