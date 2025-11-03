@@ -97,6 +97,7 @@ var nsgDefaultNameCAF = 'nsg-default-${workloadName}-${environment}-${locationAb
 var nsgAppGatewayNameCAF = 'nsg-appgw-${workloadName}-${environment}-${locationAbbr}-${uniqueSuffix}'
 var nsgContainerAppNameCAF = 'nsg-ca-${workloadName}-${environment}-${locationAbbr}-${uniqueSuffix}'
 var nsgExtraNameCAF = 'nsg-extra-${workloadName}-${environment}-${locationAbbr}-${uniqueSuffix}'
+var privateDnsZoneNameCAF = '${location}.azurecontainerapps.io'
 
 // Network Security Groups using AVM
 module nsgDefault 'br/public:avm/res/network/network-security-group:0.4.0' = {
@@ -258,6 +259,28 @@ module vnet 'br/public:avm/res/network/virtual-network:0.5.0' = {
   }
 }
 
+// Private DNS Zone for Container Apps using AVM
+module privateDnsZone 'br/public:avm/res/network/private-dns-zone:0.5.0' = {
+  name: 'private-dns-zone-deployment'
+  params: {
+    name: privateDnsZoneNameCAF
+    location: 'global'
+    virtualNetworkLinks: [
+      {
+        name: 'vnet-link-${vnetNameCAF}'
+        virtualNetworkResourceId: vnet.outputs.resourceId
+        registrationEnabled: false
+      }
+    ]
+  }
+}
+
+// Note: DNS A records for container apps should be created after deployment
+// using the actual managed environment default domain, for example:
+// az network private-dns record-set a add-record --zone-name "southcentralus.azurecontainerapps.io" 
+//   --resource-group rg-n8n-dev --record-set-name "ca-n8n-dev-scus-g4ezszbqokxhu.calmflower-201c4757" 
+//   --ipv4-address "10.0.0.90"
+
 // Public IP for Application Gateway
 module publicIP 'br/public:avm/res/network/public-ip-address:0.6.0' = {
   name: 'public-ip-deployment'
@@ -409,6 +432,9 @@ module managedEnvironment 'br/public:avm/res/app/managed-environment:0.11.3' = {
       }
     ]
   }
+  dependsOn: [
+    privateDnsZone
+  ]
 }
 
 // n8n Container App using AVM
@@ -514,3 +540,5 @@ output nsgDefaultId string = nsgDefault.outputs.resourceId
 output nsgAppGatewayId string = nsgAppGateway.outputs.resourceId
 output nsgContainerAppId string = nsgContainerApp.outputs.resourceId
 output nsgExtraId string = nsgExtra.outputs.resourceId
+output privateDnsZoneId string = privateDnsZone.outputs.resourceId
+output privateDnsZoneName string = privateDnsZoneNameCAF
