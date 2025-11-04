@@ -34,6 +34,57 @@ param keyVaultSku string = 'standard'
 @secure()
 param encryptionKeySeed string = newGuid()
 
+// Application Gateway Parameters
+@description('Application Gateway name')
+param appGatewayName string = ''
+
+@description('Application Gateway dedicated subnet ID')
+param appGatewaySubnetId string = ''
+
+@description('Public IP resource ID for Application Gateway frontend')
+param publicIpId string = ''
+
+@description('Key Vault certificate secret ID for TLS termination')
+@secure()
+param kvCertSecretId string
+
+@description('Listener host names for Application Gateway')
+param listenerHostNames array = ['n8n.smithdavid.pro']
+
+@description('Application Gateway SKU name')
+@allowed(['Standard_v2', 'WAF_v2'])
+param skuName string = 'WAF_v2'
+
+@description('Minimum autoscale instances')
+param autoscaleMin int = 1
+
+@description('Maximum autoscale instances')
+param autoscaleMax int = 5
+
+@description('Use HTTPS for backend communication')
+param backendUseHttps bool = true
+
+@description('Backend port number')
+param backendPort int = 443
+
+@description('Request timeout in seconds')
+param requestTimeoutSeconds int = 240
+
+@description('ACA backend IP addresses (preferred for private endpoints)')
+param acaBackendIpAddresses array = []
+
+@description('ACA backend FQDN')
+param acaBackendFqdn string = ''
+
+@description('Backend hostname for host header override when using IP addresses')
+param backendHostName string = 'ca-n8n-dev-scus-yzgvift2xlpw6.delightfulground-bc547139.southcentralus.azurecontainerapps.io'
+
+@description('Enable HTTP to HTTPS redirect')
+param enableHttpRedirect bool = true
+
+@description('Enable WAF protection')
+param enableWaf bool = true
+
 // Variables for CAF-compliant naming
 var locationAbbreviations = {
   eastus: 'eus'
@@ -92,6 +143,7 @@ var keyVaultNameCAF = 'kv-${workloadName}-${environment}-${locationAbbr}-${take(
 var userAssignedMINameCAF = 'id-${workloadName}-${environment}-${locationAbbr}-${uniqueSuffix}'
 var vnetNameCAF = 'vnet-${workloadName}-${environment}-${locationAbbr}-${uniqueSuffix}'
 var appgwNameCAF = 'agw-${workloadName}-${environment}-${locationAbbr}-${uniqueSuffix}'
+var wafPolicyNameCAF = 'wafpol-${workloadName}-${environment}-${locationAbbr}-${uniqueSuffix}'
 var publicIPNameCAF = 'pip-${workloadName}-${environment}-${locationAbbr}-${uniqueSuffix}'
 var nsgDefaultNameCAF = 'nsg-default-${workloadName}-${environment}-${locationAbbr}-${uniqueSuffix}'
 var nsgAppGatewayNameCAF = 'nsg-appgw-${workloadName}-${environment}-${locationAbbr}-${uniqueSuffix}'
@@ -292,72 +344,249 @@ module publicIP 'br/public:avm/res/network/public-ip-address:0.6.0' = {
   }
 }
 
-// Application Gateway Module using AVM - TEMPORARILY DISABLED
-/*
-module applicationGateway 'br/public:avm/res/network/application-gateway:0.4.0' = {
-  name: 'application-gateway-deployment'
+// WAF Policy for Application Gateway using AVM
+module wafPolicy 'br/public:avm/res/network/application-gateway-web-application-firewall-policy:0.2.0' = if (enableWaf) {
+  name: 'waf-policy-deployment'
   params: {
-    name: appgwNameCAF
+    name: wafPolicyNameCAF
     location: location
-    sku: 'WAF_v2'
-    capacity: 2
+    policySettings: {
+      state: 'Enabled'
+      mode: 'Prevention'
+      requestBodyCheck: true
+      maxRequestBodySizeInKb: 128
+      fileUploadLimitInMb: 100
+    }
+    managedRules: {
+      managedRuleSets: [
+        {
+          ruleSetType: 'OWASP'
+          ruleSetVersion: '3.2'
+        }
+        {
+          ruleSetType: 'Microsoft_BotManagerRuleSet'
+          ruleSetVersion: '1.0'
+        }
+      ]
+    }
+  }
+}
+
+// Application Gateway v2 with comprehensive configuration
+// App Gateway must reside in a dedicated subnet.
+// Key Vault–backed certificate requires MI permissions: get/list on secrets/certificates.
+// When targeting ACA by IP, host header override is required to route correctly to the app.
+resource appGateway 'Microsoft.Network/applicationGateways@2023-11-01' = {
+  name: !empty(appGatewayName) ? appGatewayName : appgwNameCAF
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${resourceGroup().id}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${userAssignedMINameCAF}': {}
+    }
+  }
+  properties: {
+    sku: {
+      name: skuName
+      tier: skuName
+    }
+    autoscaleConfiguration: {
+      minCapacity: autoscaleMin
+      maxCapacity: autoscaleMax
+    }
+    firewallPolicy: enableWaf ? {
+      id: resourceId('Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies', wafPolicyNameCAF)
+    } : null
+    enableHttp2: true
     gatewayIPConfigurations: [
       {
-        name: 'appGatewayIpConfig'
-        subnetResourceId: '${vnet.outputs.resourceId}/subnets/snet-appgw'
+        name: 'appgw-ip-configuration'
+        properties: {
+          subnet: {
+            id: !empty(appGatewaySubnetId) ? appGatewaySubnetId : '${vnet.outputs.resourceId}/subnets/snet-appgw'
+          }
+        }
       }
     ]
     frontendIPConfigurations: [
       {
-        name: 'appGatewayFrontendIP'
-        publicIPAddressResourceId: publicIP.outputs.resourceId
+        name: 'appgw-frontend-ip'
+        properties: {
+          publicIPAddress: {
+            id: !empty(publicIpId) ? publicIpId : publicIP.outputs.resourceId
+          }
+        }
       }
     ]
     frontendPorts: [
       {
-        name: 'port_80'
-        port: 80
+        name: 'http-port'
+        properties: {
+          port: 80
+        }
       }
       {
-        name: 'port_443'
-        port: 443
+        name: 'https-port'
+        properties: {
+          port: 443
+        }
+      }
+    ]
+    sslCertificates: [
+      {
+        name: 'appgw-ssl-cert'
+        properties: {
+          keyVaultSecretId: kvCertSecretId
+        }
       }
     ]
     backendAddressPools: [
       {
-        name: 'appServiceBackendPool'
+        name: 'aca-backend-pool'
+        properties: {
+          backendAddresses: !empty(acaBackendFqdn) ? [
+            {
+              fqdn: acaBackendFqdn
+            }
+          ] : [
+            {
+              fqdn: containerApp.outputs.fqdn
+            }
+          ]
+        }
       }
     ]
     backendHttpSettingsCollection: [
       {
-        name: 'defaultHttpSettings'
-        port: 80
-        protocol: 'Http'
-        cookieBasedAffinity: 'Disabled'
+        name: 'aca-backend-settings'
+        properties: {
+          port: backendPort
+          protocol: backendUseHttps ? 'Https' : 'Http'
+          cookieBasedAffinity: 'Disabled'
+          requestTimeout: requestTimeoutSeconds
+          pickHostNameFromBackendAddress: !empty(acaBackendIpAddresses) ? false : true
+          hostName: !empty(acaBackendIpAddresses) ? backendHostName : null
+          probe: {
+            id: resourceId('Microsoft.Network/applicationGateways/probes', (!empty(appGatewayName) ? appGatewayName : appgwNameCAF), 'aca-readiness-probe')
+          }
+        }
       }
     ]
-    httpListeners: [
+    probes: [
       {
-        name: 'defaultHttpListener'
-        frontendIPConfigurationName: 'appGatewayFrontendIP'
-        frontendPortName: 'port_80'
-        protocol: 'Http'
+        name: 'aca-health-probe'
+        properties: {
+          protocol: 'Http'
+          path: '/healthz'
+          interval: 30
+          timeout: 30
+          unhealthyThreshold: 3
+          pickHostNameFromBackendHttpSettings: !empty(acaBackendIpAddresses) ? false : true
+          host: !empty(acaBackendIpAddresses) ? backendHostName : null
+          match: {
+            statusCodes: [
+              '200-399'
+            ]
+          }
+        }
       }
-    ]
-    requestRoutingRules: [
       {
-        name: 'defaultRoutingRule'
-        ruleType: 'Basic'
-        httpListenerName: 'defaultHttpListener'
-        backendAddressPoolName: 'appServiceBackendPool'
-        backendHttpSettingsName: 'defaultHttpSettings'
-        priority: 100
+        name: 'aca-readiness-probe'
+        properties: {
+          protocol: 'Https'
+          path: '/healthz/readiness'
+          interval: 30
+          timeout: 30
+          unhealthyThreshold: 3
+          pickHostNameFromBackendHttpSettings: !empty(acaBackendIpAddresses) ? false : true
+          host: !empty(acaBackendIpAddresses) ? backendHostName : null
+          match: {
+            statusCodes: [
+              '200-399'
+            ]
+          }
+        }
       }
     ]
-    enableHttp2: true
+    httpListeners: concat([
+      {
+        name: 'appgw-https-listener'
+        properties: {
+          frontendIPConfiguration: {
+            id: resourceId('Microsoft.Network/applicationGateways/frontendIPConfigurations', (!empty(appGatewayName) ? appGatewayName : appgwNameCAF), 'appgw-frontend-ip')
+          }
+          frontendPort: {
+            id: resourceId('Microsoft.Network/applicationGateways/frontendPorts', (!empty(appGatewayName) ? appGatewayName : appgwNameCAF), 'https-port')
+          }
+          protocol: 'Https'
+          hostNames: listenerHostNames
+          sslCertificate: {
+            id: resourceId('Microsoft.Network/applicationGateways/sslCertificates', (!empty(appGatewayName) ? appGatewayName : appgwNameCAF), 'appgw-ssl-cert')
+          }
+        }
+      }
+    ], enableHttpRedirect ? [
+      {
+        name: 'appgw-http-listener'
+        properties: {
+          frontendIPConfiguration: {
+            id: resourceId('Microsoft.Network/applicationGateways/frontendIPConfigurations', (!empty(appGatewayName) ? appGatewayName : appgwNameCAF), 'appgw-frontend-ip')
+          }
+          frontendPort: {
+            id: resourceId('Microsoft.Network/applicationGateways/frontendPorts', (!empty(appGatewayName) ? appGatewayName : appgwNameCAF), 'http-port')
+          }
+          protocol: 'Http'
+          hostNames: listenerHostNames
+        }
+      }
+    ] : [])
+    redirectConfigurations: enableHttpRedirect ? [
+      {
+        name: 'http-to-https-redirect'
+        properties: {
+          redirectType: 'Permanent'
+          targetListener: {
+            id: resourceId('Microsoft.Network/applicationGateways/httpListeners', (!empty(appGatewayName) ? appGatewayName : appgwNameCAF), 'appgw-https-listener')
+          }
+          includePath: true
+          includeQueryString: true
+        }
+      }
+    ] : []
+    requestRoutingRules: concat([
+      {
+        name: 'appgw-https-routing-rule'
+        properties: {
+          ruleType: 'Basic'
+          priority: 100
+          httpListener: {
+            id: resourceId('Microsoft.Network/applicationGateways/httpListeners', (!empty(appGatewayName) ? appGatewayName : appgwNameCAF), 'appgw-https-listener')
+          }
+          backendAddressPool: {
+            id: resourceId('Microsoft.Network/applicationGateways/backendAddressPools', (!empty(appGatewayName) ? appGatewayName : appgwNameCAF), 'aca-backend-pool')
+          }
+          backendHttpSettings: {
+            id: resourceId('Microsoft.Network/applicationGateways/backendHttpSettingsCollection', (!empty(appGatewayName) ? appGatewayName : appgwNameCAF), 'aca-backend-settings')
+          }
+        }
+      }
+    ], enableHttpRedirect ? [
+      {
+        name: 'appgw-http-redirect-rule'
+        properties: {
+          ruleType: 'Basic'
+          priority: 110
+          httpListener: {
+            id: resourceId('Microsoft.Network/applicationGateways/httpListeners', (!empty(appGatewayName) ? appGatewayName : appgwNameCAF), 'appgw-http-listener')
+          }
+          redirectConfiguration: {
+            id: resourceId('Microsoft.Network/applicationGateways/redirectConfigurations', (!empty(appGatewayName) ? appGatewayName : appgwNameCAF), 'http-to-https-redirect')
+          }
+        }
+      }
+    ] : [])
   }
 }
-*/
 
 // User-Assigned Managed Identity using AVM
 module userAssignedMI 'br/public:avm/res/managed-identity/user-assigned-identity:0.4.0' = {
